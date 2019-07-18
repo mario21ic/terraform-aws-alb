@@ -1,11 +1,20 @@
 resource "aws_lb" "my_alb" {
-  name               = "${var.env}-alb-${var.name}"
+  count = "${var.target_group_qty}"
+
+  name               = "${var.env}-alb-${var.name}-${count.index}"
   internal           = "${var.internal}"
   load_balancer_type = "application"
-  security_groups    = ["${aws_security_group.my_sg.id}"]
+  security_groups    = ["${var.security_group_ids}"]
   subnets            = ["${var.subnet_ids}"]
 
   enable_deletion_protection = false
+  idle_timeout = "${var.timeout}"
+
+  //  access_logs {
+  //    bucket  = "${aws_s3_bucket.lb_logs.bucket}"
+  //    prefix  = "test-lb"
+  //    enabled = true
+  //  }
 
   tags {
     Env         = "${var.env}"
@@ -13,58 +22,38 @@ resource "aws_lb" "my_alb" {
   }
 }
 
-resource "aws_lb_listener" "my_listener" {
-  load_balancer_arn = "${aws_lb.my_alb.arn}"
+resource "aws_lb_listener" "listener_http" {
+  count = "${var.target_group_qty}"
+
+  load_balancer_arn = "${element(aws_lb.my_alb.*.arn, count.index)}"
   port              = "80"
   protocol          = "HTTP"
 
   default_action {
-    target_group_arn = "${aws_lb_target_group.my_tg.arn}"
+    target_group_arn = "${element(var.target_group_arns, count.index)}"
     type             = "forward"
   }
 }
 
-resource "aws_lb_target_group" "my_tg" {
-  name     = "${var.env}-tg-${var.name}"
-  target_type = "instance"
+resource "aws_lb_listener" "listener_https" {
+  count = "${var.ssl_qty}"
 
-  vpc_id   = "${var.vpc_id}"
-  protocol = "HTTP"
-  port     = 80
+  load_balancer_arn = "${element(aws_lb.my_alb.*.arn, count.index)}"
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  certificate_arn   = "${element(var.ssl_arns, count.index)}"
 
-  health_check {
-    protocol = "HTTP"
-    path = "${var.health_check_path}"
-    port = "traffic-port"
-    healthy_threshold = 8
-    unhealthy_threshold = 2
-    timeout = 5
-    interval = 30
-    matcher = "200"
+  default_action {
+    target_group_arn = "${element(var.target_group_arns, count.index)}"
+    type             = "forward"
   }
 }
 
-resource "aws_security_group" "my_sg" {
-  name        = "${var.env}-sg-alb-${var.name}"
-  description = "Autoscaling inbound and outbound"
-  vpc_id      = "${var.vpc_id}"
+# Maximum 25 without default
+resource "aws_lb_listener_certificate" "extras" {
+  count = "${var.target_group_qty * var.ssl_extras_qty}"
 
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags {
-    Env         = "sg-lb-${var.env}"
-    Description = "Security group of ${var.env}"
-  }
+  listener_arn    = "${element(aws_lb_listener.listener_https.*.arn, count.index)}"
+  certificate_arn = "${element(var.ssl_extras_arns, count.index)}"
 }
